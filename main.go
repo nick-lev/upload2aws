@@ -65,17 +65,17 @@ func blacklisted(name string) bool {
 	return true
 }
 
-func sanitizeImage(file io.Reader, ext string) io.Reader {
-	// var img image.Image
+func sanitizeImage(image io.Reader, ext string) io.Reader {
+	// var buf bytes.Buffer
 	switch ext {
 	case ".jpg":
+		// img, err := jpeg.Decode(image)
+		// err = jpeg.Encode(buf, img, nil)
 	case ".jpeg":
 	case ".png":
 	case ".gif":
-	default:
-		fmt.Errorf("sanitizeImage got unknown file ext!")
 	}
-	return file
+	return image
 }
 func hForm(w http.ResponseWriter, r *http.Request) {
 	body, _ := ioutil.ReadFile("index.html")
@@ -94,13 +94,14 @@ func hUpload(w http.ResponseWriter, r *http.Request) {
 	r.ParseMultipartForm(MaxMemory4File)
 
 	file, header, err := r.FormFile("uploadfile")
-	defer file.Close()
-
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, "%s", err)
 		return
+	} else {
+		defer file.Close()
 	}
+
 	if header.Filename == "" {
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, "not enough param")
@@ -115,13 +116,11 @@ func hUpload(w http.ResponseWriter, r *http.Request) {
 	fname, ext := genFilename(header.Filename)
 
 	//sanitize image [JPG GIF PNG]
-	for _, e := range []string{".jpg", ".jpeg", ".gif", ".png"} {
-		if ext == e {
-			// file = sanitizeImage(file, ext)
-		}
-	}
+	var img io.Reader
+	img = file
+	img = sanitizeImage(img, ext)
 
-	location, err := Upload(Bucket, fname, file)
+	location, err := Upload(Bucket, fname, img)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "%s", err)
