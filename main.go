@@ -6,66 +6,92 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"regexp"
+	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 )
 
-var Reg string = "us-east-2"
+var Reg string = "us-east-2" //region string for aws config
 var Conf = aws.Config{Region: &Reg}
+var Bucket string = "elasticbeanstalk-us-east-2-144900901449"
+var MaxFileSize int64 = 10 * 1024 * 1024   //limit accepted size of parsing request
+var MaxMemory4File int64 = 1 * 1024 * 1024 //optimise (limit) memory for request parsing
 
-func blacklisted_name(name string) bool {
+func blacklisted(name string) bool {
 	fmt.Println(name)
+	//simple white list for filename
+	whitelist := regexp.MustCompile(`^[a-zA-Z0-9_.]+$`).MatchString
+	if !whitelist(name) {
+		return true
+	}
+
+	bExt := []string{".aspx", ".css", ".swf", ".xhtml", ".rhtml", ".shtml", ".jsp", ".js", ".pl", ".php", ".cgi"}
+	for _, ext := range bExt {
+		if strings.HasSuffix(name, ext) {
+			return true
+		}
+	}
+
+	bName := []string{"crossdomain.xml", "clientaccesspolicy.xml", ".htaccess", ".htpasswd"}
+	for _, n := range bName {
+		if strings.Contains(name, n) {
+			return true
+		}
+	}
+
 	return false
 }
 
-func blacklisted_type(buf []byte) bool {
-	contentType := http.DetectContentType(buf)
-	fmt.Println(contentType)
-	return false
-}
-
-// func sanitizeImage(file io.Reader) io.Reader{
+// func sanitizeImage(file io.Reader, ext string) io.Reader {
 // return file
 // }
-
 func hForm(w http.ResponseWriter, r *http.Request) {
 	body, _ := ioutil.ReadFile("index.html")
+	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "%s", body)
 }
 func hUpload(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("method:", r.Method)
 	if r.Method != "POST" {
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "Wrong form!")
+		fmt.Fprintf(w, "wrong method")
 		return
+
 	}
-	r.ParseMultipartForm(10 * 1024 * 1024)
+
+	r.Body = http.MaxBytesReader(w, r.Body, MaxFileSize)
+	r.ParseMultipartForm(MaxMemory4File)
+
 	file, header, err := r.FormFile("uploadfile")
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, "%s", err)
 		return
 	}
-
-	if blacklisted_name(header.Filename) {
+	if header.Filename == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "not enough param")
+		return
+	}
+	if blacklisted(header.Filename) {
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, "filename blacklisted")
 		return
 	}
-	// buffer := make([]byte{file})
-	// if blacklisted_type(buffer) {
-	// w.WriteHeader(http.StatusBadRequest)
-	// fmt.Fprintf(w, "filetype blacklisted")
-	// return
-	// }
 
-	//sanitizeImage()
+	//sanitize image [JPG GIF PNG]
+	// for _, ext := range []string{"jpg", "gif", "png"} {
+	// if strings.HasSuffix(header.Filename, ext) {
+	// file = sanitizeImage(file, ext)
+	// }
+	// }
+	//check archive content
 
 	defer file.Close()
-	bucket := "elasticbeanstalk-us-east-2-144900901449"
-	location, err := Upload(bucket, header.Filename, file)
+	location, err := Upload(Bucket, header.Filename, file)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "%s", err)
@@ -91,7 +117,6 @@ func Upload(bucket, filename string, file io.Reader) (string, error) {
 	}
 	return res, err
 }
-
 func main() {
 	http.HandleFunc("/", hForm)
 	http.HandleFunc("/upload", hUpload)
