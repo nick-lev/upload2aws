@@ -6,8 +6,9 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"regexp"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -17,44 +18,71 @@ import (
 var Reg string = "us-east-2" //region string for aws config
 var Conf = aws.Config{Region: &Reg}
 var Bucket string = "elasticbeanstalk-us-east-2-144900901449"
-var MaxFileSize int64 = 10 * 1024 * 1024   //limit accepted size of parsing request
-var MaxMemory4File int64 = 1 * 1024 * 1024 //optimise (limit) memory for request parsing
+var MaxFileSize int64 = 10 * 1024 * 1024    //limit accepted size of parsing request
+var MaxMemory4File int64 = 10 * 1024 * 1024 //optimise (limit) memory for request parsing
 
-func blacklisted(name string) bool {
-	fmt.Println(name)
-	//simple white list for filename
-	whitelist := regexp.MustCompile(`^[a-zA-Z0-9_.]+$`).MatchString
-	if !whitelist(name) {
-		return true
-	}
+var FileID int //tmp filename-id generator
 
-	bExt := []string{".aspx", ".css", ".swf", ".xhtml", ".rhtml", ".shtml", ".jsp", ".js", ".pl", ".php", ".cgi"}
-	for _, ext := range bExt {
-		if strings.HasSuffix(name, ext) {
-			return true
-		}
-	}
+const userID = "project129"
 
-	bName := []string{"crossdomain.xml", "clientaccesspolicy.xml", ".htaccess", ".htpasswd"}
-	for _, n := range bName {
-		if strings.Contains(name, n) {
-			return true
-		}
-	}
+var fieldID int
 
-	return false
+//name = userID/YYYYMMDD.fileID.ext
+func genFilename(name string) (string, string) {
+	ext := strings.ToLower(filepath.Ext(name))
+	now := time.Now()
+	FileID++
+	nameNorm := fmt.Sprintf("%s/%04d%02d%02d.%09d%s", userID, now.Year(), now.Month(), now.Day(), FileID, ext)
+	return nameNorm, ext
 }
 
-// func sanitizeImage(file io.Reader, ext string) io.Reader {
-// return file
-// }
+func blacklisted(name string) bool {
+	nameNorm := strings.ToLower(name)
+	ext := filepath.Ext(nameNorm)
+	//blacklisted files
+	bName := []string{"crossdomain.xml", "clientaccesspolicy.xml", ".htaccess", ".htpasswd"}
+	for _, n := range bName {
+		if strings.Contains(nameNorm, n) {
+			log.Print("blacklisted filename:", name)
+			return true
+		}
+	}
+	//blacklisted exstentions
+	bExt := []string{".aspx", ".css", ".swf", ".xhtml", ".rhtml", ".shtml", ".jsp", ".js", ".pl", ".php", ".cgi"}
+	for _, b := range bExt {
+		if ext == b {
+			log.Print("blacklisted filext:", name)
+			return true
+		}
+	}
+	//whitelist of accepted ext's
+	wExt := []string{".pdf", ".png", ".gif", ".jpg", ".jpeg"}
+	for _, w := range wExt {
+		if ext == w {
+			return false
+		}
+	}
+	return true
+}
+
+func sanitizeImage(file io.Reader, ext string) io.Reader {
+	// var img image.Image
+	switch ext {
+	case ".jpg":
+	case ".jpeg":
+	case ".png":
+	case ".gif":
+	default:
+		fmt.Errorf("sanitizeImage got unknown file ext!")
+	}
+	return file
+}
 func hForm(w http.ResponseWriter, r *http.Request) {
 	body, _ := ioutil.ReadFile("index.html")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "%s", body)
 }
 func hUpload(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("method:", r.Method)
 	if r.Method != "POST" {
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, "wrong method")
@@ -66,6 +94,8 @@ func hUpload(w http.ResponseWriter, r *http.Request) {
 	r.ParseMultipartForm(MaxMemory4File)
 
 	file, header, err := r.FormFile("uploadfile")
+	defer file.Close()
+
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprintf(w, "%s", err)
@@ -82,16 +112,16 @@ func hUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//sanitize image [JPG GIF PNG]
-	// for _, ext := range []string{"jpg", "gif", "png"} {
-	// if strings.HasSuffix(header.Filename, ext) {
-	// file = sanitizeImage(file, ext)
-	// }
-	// }
-	//check archive content
+	fname, ext := genFilename(header.Filename)
 
-	defer file.Close()
-	location, err := Upload(Bucket, header.Filename, file)
+	//sanitize image [JPG GIF PNG]
+	for _, e := range []string{".jpg", ".jpeg", ".gif", ".png"} {
+		if ext == e {
+			// file = sanitizeImage(file, ext)
+		}
+	}
+
+	location, err := Upload(Bucket, fname, file)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, "%s", err)
